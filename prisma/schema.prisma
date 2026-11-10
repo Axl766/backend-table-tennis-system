@@ -1,0 +1,400 @@
+// Esquema de la base del sistema de gestión y control de torneos de tenis de mesa.
+// Fuente del dominio: specs/tournament-database/spec.md + GLOSSARY.md (glosario español ↔ esquema inglés, ADR 0001).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Cuenta con perfil de plataforma: administrator / head_judge global, o referee ligado a un torneo.
+model Account {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  role         String  @db.VarChar(20)
+  tournamentId String? @map("tournament_id") @db.Uuid
+  isActive     Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament Tournament? @relation("AccountTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_account_tournament")
+
+  ownedTournaments Tournament[] @relation("TournamentHeadJudge")
+  refereedMatches  Match[]      @relation("MatchReferee")
+  auditEntries     AuditLog[]   @relation("AuditLogActor")
+
+  @@index([tournamentId], map: "ix_account_tournament")
+  @@map("account")
+}
+
+/// Torneo creado por un juez general; aquí vive la configuración del formato (mejor de 3/5/7).
+model Tournament {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  headJudgeId String @map("head_judge_id") @db.Uuid
+  name        String @db.VarChar(80)
+  gamesToWin  Int    @map("games_to_win")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  headJudge Account @relation("TournamentHeadJudge", fields: [headJudgeId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_head_judge")
+
+  refereeAccounts Account[]         @relation("AccountTournament")
+  tables          TournamentTable[] @relation("TournamentTableTournament")
+  categories      Category[]        @relation("CategoryTournament")
+  players         Player[]          @relation("PlayerTournament")
+  participants    Participant[]     @relation("ParticipantTournament")
+  groups          TournamentGroup[] @relation("TournamentGroupTournament")
+  matches         Match[]           @relation("MatchTournament")
+  brackets        Bracket[]         @relation("BracketTournament")
+  podiums         Podium[]          @relation("PodiumTournament")
+  events          TournamentEvent[] @relation("TournamentEventTournament")
+  scheduleImages  ScheduleImage[]   @relation("ScheduleImageTournament")
+
+  @@unique([headJudgeId, name], map: "uq_tournament_head_judge_name")
+  @@index([headJudgeId], map: "ix_tournament_head_judge")
+  @@map("tournament")
+}
+
+/// Mesa de juego del torneo ("mesa" en el glosario), numerada por torneo, con su cola de partidos.
+model TournamentTable {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tournamentId String @map("tournament_id") @db.Uuid
+  number       Int
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament Tournament @relation("TournamentTableTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_table_tournament")
+
+  matches Match[] @relation("MatchTable")
+
+  @@unique([tournamentId, number], map: "uq_tournament_table_number")
+  @@index([tournamentId], map: "ix_tournament_table_tournament")
+  @@map("tournament_table")
+}
+
+/// Categoría del catálogo del tenis de mesa: base global (IV07–IV19, rangos adultos, TC) más adicionales por torneo.
+model Category {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  code         String  @unique(map: "uq_category_code") @db.VarChar(12)
+  name         String  @db.VarChar(60)
+  tournamentId String? @map("tournament_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament Tournament? @relation("CategoryTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_category_tournament")
+
+  participants Participant[]     @relation("ParticipantCategory")
+  groups       TournamentGroup[] @relation("TournamentGroupCategory")
+  brackets     Bracket[]         @relation("BracketCategory")
+  podiums      Podium[]          @relation("PodiumCategory")
+
+  @@unique([tournamentId, code], map: "uq_category_tournament_code")
+  @@map("category")
+}
+
+/// Modalidad disputada: individuales, dobles o equipos.
+model Modality {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  name String @unique(map: "uq_modality_name") @db.VarChar(30)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  genderConformations ModalityGender[]  @relation("ModalityGenderModality")
+  participants        Participant[]     @relation("ParticipantModality")
+  groups              TournamentGroup[] @relation("TournamentGroupModality")
+  brackets            Bracket[]         @relation("BracketModality")
+  podiums             Podium[]          @relation("PodiumModality")
+
+  @@map("modality")
+}
+
+/// Conformaciones de género (Damas, Varones, Mixta) que admite cada modalidad.
+model ModalityGender {
+  modalityId   String @map("modality_id") @db.Uuid
+  conformation String @db.VarChar(10)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  modality Modality @relation("ModalityGenderModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_modality_gender_modality")
+
+  @@id([modalityId, conformation])
+  @@map("modality_gender")
+}
+
+/// Jugador inscrito en un torneo; los duplicados se previenen en la validación de la importación.
+model Player {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tournamentId String  @map("tournament_id") @db.Uuid
+  fullName     String  @map("full_name") @db.VarChar(100)
+  gender       String? @db.VarChar(10)
+  age          Int?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament Tournament @relation("PlayerTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_player_tournament")
+
+  rosters ParticipantPlayer[] @relation("ParticipantPlayerPlayer")
+
+  @@index([tournamentId], map: "ix_player_tournament")
+  @@map("player")
+}
+
+/// Inscripción en un torneo: jugador suelto, pareja o equipo por rama categoría × modalidad × conformación; siempre entra por importación y admite baja lógica antes del sellado.
+model Participant {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tournamentId String    @map("tournament_id") @db.Uuid
+  categoryId   String    @map("category_id") @db.Uuid
+  modalityId   String    @map("modality_id") @db.Uuid
+  conformation String    @db.VarChar(10)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament Tournament @relation("ParticipantTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_participant_tournament")
+  category   Category   @relation("ParticipantCategory", fields: [categoryId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_participant_category")
+  modality   Modality   @relation("ParticipantModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_participant_modality")
+
+  roster  ParticipantPlayer[] @relation("ParticipantPlayerParticipant")
+  facing  MatchParticipant[]  @relation("MatchParticipantParticipant")
+  wins    Match[]             @relation("MatchWinnerParticipant")
+  podiums Podium[]            @relation("PodiumParticipant")
+
+  @@index([tournamentId], map: "ix_participant_tournament")
+  @@index([categoryId], map: "ix_participant_category")
+  @@index([modalityId], map: "ix_participant_modality")
+  @@map("participant")
+}
+
+/// Roster de una inscripción: jugador con su orden (pareja de 2, equipo de 3–5).
+model ParticipantPlayer {
+  participantId String @map("participant_id") @db.Uuid
+  playerId      String @map("player_id") @db.Uuid
+  slot          Int
+
+  participant Participant @relation("ParticipantPlayerParticipant", fields: [participantId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_participant_player_participant")
+  player      Player      @relation("ParticipantPlayerPlayer", fields: [playerId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_participant_player_player")
+
+  @@id([participantId, playerId])
+  @@index([playerId], map: "ix_participant_player_player")
+  @@map("participant_player")
+}
+
+/// Grupo de una rama (torneo × categoría × modalidad × conformación) identificado con letra A, B…
+model TournamentGroup {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tournamentId String @map("tournament_id") @db.Uuid
+  categoryId   String @map("category_id") @db.Uuid
+  modalityId   String @map("modality_id") @db.Uuid
+  conformation String @db.VarChar(10)
+  groupLetter  String @map("group_letter") @db.VarChar(2)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament Tournament @relation("TournamentGroupTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_group_tournament")
+  category   Category   @relation("TournamentGroupCategory", fields: [categoryId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_group_category")
+  modality   Modality   @relation("TournamentGroupModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_group_modality")
+
+  matches Match[] @relation("MatchGroup")
+
+  @@unique([tournamentId, categoryId, modalityId, conformation, groupLetter], map: "uq_tournament_group_branch_letter")
+  @@map("tournament_group")
+}
+
+/// Llave final de una rama: clasificados por grupo y tercer puesto opcional.
+model Bracket {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tournamentId       String  @map("tournament_id") @db.Uuid
+  categoryId         String  @map("category_id") @db.Uuid
+  modalityId         String  @map("modality_id") @db.Uuid
+  conformation       String  @db.VarChar(10)
+  classifiedPerGroup Int     @map("classified_per_group")
+  hasThirdPlace      Boolean @default(false) @map("has_third_place")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament Tournament @relation("BracketTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_bracket_tournament")
+  category   Category   @relation("BracketCategory", fields: [categoryId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_bracket_category")
+  modality   Modality   @relation("BracketModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_bracket_modality")
+
+  matches Match[] @relation("MatchBracket")
+
+  @@unique([tournamentId, categoryId, modalityId, conformation], map: "uq_bracket_branch")
+  @@map("bracket")
+}
+
+/// Partido unificado de fase de grupos o de llave, con mesa/cola, árbitro, ganador y avance declarado.
+model Match {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tournamentId        String  @map("tournament_id") @db.Uuid
+  kind                String  @db.VarChar(10)
+  status              String  @default("pendiente") @db.VarChar(10)
+  groupId             String? @map("group_id") @db.Uuid
+  bracketId           String? @map("bracket_id") @db.Uuid
+  roundNo             Int?    @map("round_no")
+  tableId             String? @map("table_id") @db.Uuid
+  queuePosition       Int?    @map("queue_position")
+  refereeId           String? @map("referee_id") @db.Uuid
+  winnerParticipantId String? @map("winner_participant_id") @db.Uuid
+  nextMatchId         String? @map("next_match_id") @db.Uuid
+  isThirdPlace        Boolean @default(false) @map("is_third_place")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament Tournament       @relation("MatchTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_tournament")
+  group      TournamentGroup? @relation("MatchGroup", fields: [groupId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_group")
+  bracket    Bracket?         @relation("MatchBracket", fields: [bracketId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_match_bracket")
+  table      TournamentTable? @relation("MatchTable", fields: [tableId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_table")
+  referee    Account?         @relation("MatchReferee", fields: [refereeId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_referee")
+  winner     Participant?     @relation("MatchWinnerParticipant", fields: [winnerParticipantId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_winner_participant")
+
+  nextMatch       Match?  @relation("MatchNextMatch", fields: [nextMatchId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_match_next_match")
+  previousMatches Match[] @relation("MatchNextMatch")
+
+  facing MatchParticipant[] @relation("MatchFacing")
+  games  MatchGame[]        @relation("MatchGameMatch")
+
+  @@index([tournamentId], map: "ix_match_tournament")
+  @@index([tournamentId, status], map: "ix_match_tournament_status")
+  @@index([groupId], map: "ix_match_group")
+  @@index([bracketId], map: "ix_match_bracket")
+  @@index([tableId], map: "ix_match_table")
+  @@index([tableId, status], map: "ix_match_table_status")
+  @@index([tableId, queuePosition], map: "ix_match_table_queue")
+  @@index([refereeId], map: "ix_match_referee")
+  @@index([winnerParticipantId], map: "ix_match_winner_participant")
+  @@index([nextMatchId], map: "ix_match_next_match")
+  @@map("match")
+}
+
+/// Enfrentado de un partido con su slot 1/2; participante NULL marca el bye.
+model MatchParticipant {
+  matchId       String  @map("match_id") @db.Uuid
+  slot          Int
+  participantId String? @map("participant_id") @db.Uuid
+
+  match       Match        @relation("MatchFacing", fields: [matchId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_match_participant_match")
+  participant Participant? @relation("MatchParticipantParticipant", fields: [participantId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_participant_participant")
+
+  @@id([matchId, slot])
+  @@index([participantId], map: "ix_match_participant_participant")
+  @@map("match_participant")
+}
+
+/// Marcador de un game del partido: puntos del ganador y del perdedor.
+model MatchGame {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  matchId      String @map("match_id") @db.Uuid
+  gameNo       Int    @map("game_no")
+  winnerSlot   Int    @map("winner_slot")
+  winnerPoints Int    @map("winner_points")
+  loserPoints  Int    @map("loser_points")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  match Match @relation("MatchGameMatch", fields: [matchId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_match_game_match")
+
+  @@unique([matchId, gameNo], map: "uq_match_game_match_no")
+  @@map("match_game")
+}
+
+/// Podio consolidado al cierre del torneo: puestos 1°–3° por rama.
+model Podium {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tournamentId  String @map("tournament_id") @db.Uuid
+  categoryId    String @map("category_id") @db.Uuid
+  modalityId    String @map("modality_id") @db.Uuid
+  conformation  String @db.VarChar(10)
+  place         Int
+  participantId String @map("participant_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament  Tournament  @relation("PodiumTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_podium_tournament")
+  category    Category    @relation("PodiumCategory", fields: [categoryId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_podium_category")
+  modality    Modality    @relation("PodiumModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_podium_modality")
+  participant Participant @relation("PodiumParticipant", fields: [participantId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_podium_participant")
+
+  @@unique([tournamentId, categoryId, modalityId, conformation, place], map: "uq_podium_branch_place")
+  @@index([participantId], map: "ix_podium_participant")
+  @@map("podium")
+}
+
+/// Evento de competencia (publicar fase de grupos / cerrar torneo), único por tipo, con snapshot JSONB.
+model TournamentEvent {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tournamentId String   @map("tournament_id") @db.Uuid
+  type         String   @db.VarChar(20)
+  occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz
+  snapshot     Json     @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament Tournament @relation("TournamentEventTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_event_tournament")
+
+  @@unique([tournamentId, type], map: "uq_tournament_event_tournament_type")
+  @@map("tournament_event")
+}
+
+/// Cronograma del torneo anexado como imagen versionada.
+model ScheduleImage {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tournamentId String @map("tournament_id") @db.Uuid
+  version      Int
+  imageData    Bytes  @map("image_data")
+  mimeType     String @map("mime_type") @db.VarChar(100)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tournament Tournament @relation("ScheduleImageTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_schedule_image_tournament")
+
+  @@unique([tournamentId, version], map: "uq_schedule_image_tournament_version")
+  @@map("schedule_image")
+}
+
+/// Auditación de correcciones y reprogramaciones: quién, cuándo, valor anterior y nuevo.
+model AuditLog {
+  id BigInt @id @default(autoincrement())
+
+  actorAccountId String   @map("actor_account_id") @db.Uuid
+  entity         String   @db.VarChar(50)
+  entityId       String   @map("entity_id") @db.Uuid
+  oldValue       Json?    @map("old_value") @db.JsonB
+  newValue       Json?    @map("new_value") @db.JsonB
+  occurredAt     DateTime @default(now()) @map("occurred_at") @db.Timestamptz
+
+  actorAccount Account @relation("AuditLogActor", fields: [actorAccountId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_audit_log_actor")
+
+  @@index([entity, entityId], map: "ix_audit_log_entity")
+  @@map("audit_log")
+}

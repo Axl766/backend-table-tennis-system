@@ -1,0 +1,12 @@
+# Dependencias
+node_modules/
+
+# Entorno y secretos
+.env
+.env.*
+
+# Artefactos generados
+src/generated/
+node_modules/.cache/
+*.log
+dist/

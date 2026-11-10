@@ -24,6 +24,10 @@ _Avoid_: árbitro de mesa (sinónimo coloquial), referee.
 Competencia creada por un juez general. No tiene etapas de estado: se gestiona desde su dashboard; solo existen eventos de la competencia (publicar fase de grupos, cerrar torneo).
 _Avoid_: campeonato (colocar solo en contexto de difusión), evento.
 
+**Configuración del torneo**:
+El formato que el juez general fija al crear el torneo: cuántos juegos necesita ganar un partido para definirlo (mejor de 3, 5 o 7).
+_Avoid_: reglas del torneo, formato de juego.
+
 **Participante**:
 Inscripto en un torneo: jugador individual, pareja o equipo según la modalidad.
 _Avoid_: inscripción (es el acta, no la persona).
@@ -53,7 +57,11 @@ Etapa posterior a la carga de participantes en la que se disputan partidos dentr
 
 **Cruce**:
 Enfrentamiento entre dos participantes del mismo grupo. La tabla de cruces es la lista de todos los enfrentamientos del grupo.
-_Avoid_: matchup, cruce de grupos (reservado para el emparejamiento de la llave).
+_Avoid_: matchup, cruce de grupos (reservado para el emparejamiento de la llave), match.
+
+**Slot de enfrentados**:
+El orden (1 o 2) con el que un participante figura en un partido, de modo que tablas de cruces y llaves identifiquen a quien corresponde cada lado sin depender de texto armado a mano.
+_Avoid_: posición (reservada para la tabla de posiciones), lado.
 
 **Publicar la fase de grupos**:
 Acontecimiento por el que el juez general sella el sorteo: queda auditable, los participantes dejan de editarse y los partidos de grupo pasan a programarse.
@@ -89,6 +97,14 @@ Orden de la tabla de posiciones: más PG → mayor razón de games → mayor raz
 **Llave final**:
 Bracket de eliminación generado con los clasificados de la fase de grupos, por rondas.
 _Avoid_: llave final única (la llave también admite bye y tercer puesto).
+
+**Match en llave**:
+Partido que pertenece a la llave final: su ganador avanza al match siguiente declarado en la llave.
+_Avoid_: eliminatoria, duelo.
+
+**Clasificados por grupo**:
+Cantidad de participantes de cada grupo que avanzan a la llave final, fija por el juez al configurarla.
+_Avoid_: cupo, clasificados (a secas: el término siempre alude a la cantidad por grupo).
 
 **Bye**:
 Avance directo de un clasificado cuando la cantidad no completa la primera ronda. Se muestra explícito en la llave.
