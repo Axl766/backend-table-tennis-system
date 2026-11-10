@@ -114,6 +114,8 @@ CREATE TABLE "modality" (
 CREATE TABLE "modality_gender" (
     "modality_id" UUID NOT NULL,
     "conformation" VARCHAR(10) NOT NULL,
+    "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ NOT NULL,
 
     CONSTRAINT "modality_gender_pkey" PRIMARY KEY ("modality_id","conformation")
 );
@@ -188,7 +190,7 @@ CREATE TABLE "match" (
     "id" UUID NOT NULL,
     "tournament_id" UUID NOT NULL,
     "kind" VARCHAR(10) NOT NULL,
-    "status" VARCHAR(10) NOT NULL,
+    "status" VARCHAR(10) NOT NULL DEFAULT 'pendiente',
     "group_id" UUID,
     "bracket_id" UUID,
     "round_no" INTEGER,
@@ -303,6 +305,9 @@ CREATE UNIQUE INDEX "uq_category_code" ON "category"("code");
 CREATE UNIQUE INDEX "uq_category_tournament_code" ON "category"("tournament_id", "code") NULLS NOT DISTINCT;
 
 -- CreateIndex
+CREATE UNIQUE INDEX "uq_modality_name" ON "modality"("name");
+
+-- CreateIndex
 CREATE INDEX "ix_player_tournament" ON "player"("tournament_id");
 
 -- CreateIndex
@@ -339,6 +344,12 @@ CREATE INDEX "ix_match_bracket" ON "match"("bracket_id");
 CREATE INDEX "ix_match_table" ON "match"("table_id");
 
 -- CreateIndex
+CREATE INDEX "ix_match_table_status" ON "match"("table_id", "status");
+
+-- CreateIndex
+CREATE INDEX "ix_match_table_queue" ON "match"("table_id", "queue_position");
+
+-- CreateIndex
 CREATE INDEX "ix_match_referee" ON "match"("referee_id");
 
 -- CreateIndex
@@ -368,107 +379,112 @@ CREATE UNIQUE INDEX "uq_schedule_image_tournament_version" ON "schedule_image"("
 -- CreateIndex
 CREATE INDEX "ix_audit_log_entity" ON "audit_log"("entity", "entity_id");
 
--- AddForeignKey
-ALTER TABLE "account" ADD CONSTRAINT "fk_account_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+-- FK ON UPDATE decision (code review): every FK target is a PK of immutable
+-- UUIDs (app-side minting, never reassigned), so ON UPDATE is irrelevant;
+-- declared explicitly as RESTRICT on all FKs instead of the engine's own
+-- behavior, keeping the contract deliberate and uniform.
 
 -- AddForeignKey
-ALTER TABLE "tournament" ADD CONSTRAINT "fk_tournament_head_judge" FOREIGN KEY ("head_judge_id") REFERENCES "account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "account" ADD CONSTRAINT "fk_account_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "tournament_table" ADD CONSTRAINT "fk_tournament_table_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "tournament" ADD CONSTRAINT "fk_tournament_head_judge" FOREIGN KEY ("head_judge_id") REFERENCES "account"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "category" ADD CONSTRAINT "fk_category_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "tournament_table" ADD CONSTRAINT "fk_tournament_table_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "modality_gender" ADD CONSTRAINT "fk_modality_gender_modality" FOREIGN KEY ("modality_id") REFERENCES "modality"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "category" ADD CONSTRAINT "fk_category_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "player" ADD CONSTRAINT "fk_player_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "modality_gender" ADD CONSTRAINT "fk_modality_gender_modality" FOREIGN KEY ("modality_id") REFERENCES "modality"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "participant" ADD CONSTRAINT "fk_participant_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "player" ADD CONSTRAINT "fk_player_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "participant" ADD CONSTRAINT "fk_participant_category" FOREIGN KEY ("category_id") REFERENCES "category"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "participant" ADD CONSTRAINT "fk_participant_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "participant" ADD CONSTRAINT "fk_participant_modality" FOREIGN KEY ("modality_id") REFERENCES "modality"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "participant" ADD CONSTRAINT "fk_participant_category" FOREIGN KEY ("category_id") REFERENCES "category"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "participant_player" ADD CONSTRAINT "fk_participant_player_participant" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "participant" ADD CONSTRAINT "fk_participant_modality" FOREIGN KEY ("modality_id") REFERENCES "modality"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "participant_player" ADD CONSTRAINT "fk_participant_player_player" FOREIGN KEY ("player_id") REFERENCES "player"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "participant_player" ADD CONSTRAINT "fk_participant_player_participant" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "tournament_group" ADD CONSTRAINT "fk_tournament_group_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "participant_player" ADD CONSTRAINT "fk_participant_player_player" FOREIGN KEY ("player_id") REFERENCES "player"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "tournament_group" ADD CONSTRAINT "fk_tournament_group_category" FOREIGN KEY ("category_id") REFERENCES "category"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "tournament_group" ADD CONSTRAINT "fk_tournament_group_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "tournament_group" ADD CONSTRAINT "fk_tournament_group_modality" FOREIGN KEY ("modality_id") REFERENCES "modality"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "tournament_group" ADD CONSTRAINT "fk_tournament_group_category" FOREIGN KEY ("category_id") REFERENCES "category"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "bracket" ADD CONSTRAINT "fk_bracket_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "tournament_group" ADD CONSTRAINT "fk_tournament_group_modality" FOREIGN KEY ("modality_id") REFERENCES "modality"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "bracket" ADD CONSTRAINT "fk_bracket_category" FOREIGN KEY ("category_id") REFERENCES "category"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "bracket" ADD CONSTRAINT "fk_bracket_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "bracket" ADD CONSTRAINT "fk_bracket_modality" FOREIGN KEY ("modality_id") REFERENCES "modality"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "bracket" ADD CONSTRAINT "fk_bracket_category" FOREIGN KEY ("category_id") REFERENCES "category"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "match" ADD CONSTRAINT "fk_match_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "bracket" ADD CONSTRAINT "fk_bracket_modality" FOREIGN KEY ("modality_id") REFERENCES "modality"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "match" ADD CONSTRAINT "fk_match_group" FOREIGN KEY ("group_id") REFERENCES "tournament_group"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "match" ADD CONSTRAINT "fk_match_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "match" ADD CONSTRAINT "fk_match_bracket" FOREIGN KEY ("bracket_id") REFERENCES "bracket"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "match" ADD CONSTRAINT "fk_match_group" FOREIGN KEY ("group_id") REFERENCES "tournament_group"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "match" ADD CONSTRAINT "fk_match_table" FOREIGN KEY ("table_id") REFERENCES "tournament_table"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "match" ADD CONSTRAINT "fk_match_bracket" FOREIGN KEY ("bracket_id") REFERENCES "bracket"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "match" ADD CONSTRAINT "fk_match_referee" FOREIGN KEY ("referee_id") REFERENCES "account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "match" ADD CONSTRAINT "fk_match_table" FOREIGN KEY ("table_id") REFERENCES "tournament_table"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "match" ADD CONSTRAINT "fk_match_winner_participant" FOREIGN KEY ("winner_participant_id") REFERENCES "participant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "match" ADD CONSTRAINT "fk_match_referee" FOREIGN KEY ("referee_id") REFERENCES "account"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "match" ADD CONSTRAINT "fk_match_next_match" FOREIGN KEY ("next_match_id") REFERENCES "match"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "match" ADD CONSTRAINT "fk_match_winner_participant" FOREIGN KEY ("winner_participant_id") REFERENCES "participant"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "match_participant" ADD CONSTRAINT "fk_match_participant_match" FOREIGN KEY ("match_id") REFERENCES "match"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "match" ADD CONSTRAINT "fk_match_next_match" FOREIGN KEY ("next_match_id") REFERENCES "match"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "match_participant" ADD CONSTRAINT "fk_match_participant_participant" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "match_participant" ADD CONSTRAINT "fk_match_participant_match" FOREIGN KEY ("match_id") REFERENCES "match"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "match_game" ADD CONSTRAINT "fk_match_game_match" FOREIGN KEY ("match_id") REFERENCES "match"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "match_participant" ADD CONSTRAINT "fk_match_participant_participant" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "podium" ADD CONSTRAINT "fk_podium_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "match_game" ADD CONSTRAINT "fk_match_game_match" FOREIGN KEY ("match_id") REFERENCES "match"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "podium" ADD CONSTRAINT "fk_podium_category" FOREIGN KEY ("category_id") REFERENCES "category"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "podium" ADD CONSTRAINT "fk_podium_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "podium" ADD CONSTRAINT "fk_podium_modality" FOREIGN KEY ("modality_id") REFERENCES "modality"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "podium" ADD CONSTRAINT "fk_podium_category" FOREIGN KEY ("category_id") REFERENCES "category"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "podium" ADD CONSTRAINT "fk_podium_participant" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "podium" ADD CONSTRAINT "fk_podium_modality" FOREIGN KEY ("modality_id") REFERENCES "modality"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "tournament_event" ADD CONSTRAINT "fk_tournament_event_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "podium" ADD CONSTRAINT "fk_podium_participant" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "schedule_image" ADD CONSTRAINT "fk_schedule_image_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "tournament_event" ADD CONSTRAINT "fk_tournament_event_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "audit_log" ADD CONSTRAINT "fk_audit_log_actor" FOREIGN KEY ("actor_account_id") REFERENCES "account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "schedule_image" ADD CONSTRAINT "fk_schedule_image_tournament" FOREIGN KEY ("tournament_id") REFERENCES "tournament"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE "audit_log" ADD CONSTRAINT "fk_audit_log_actor" FOREIGN KEY ("actor_account_id") REFERENCES "account"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- ============================================================================
 -- Custom SQL #1 — CHECK constraints (ck_*), after all tables and FKs.
