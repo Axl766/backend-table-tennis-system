@@ -1,0 +1,6 @@
+onlyBuiltDependencies:
+  - '@prisma/engines'
+  - '@node-rs/argon2'
+  - esbuild
+  - oxlint
+  - prisma

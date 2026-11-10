@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "references": {
+    "management-system": {
+      "path": "../../back-end-management-system",
+      "description": "Proyecto back-end-management-system: usa esta referencia para consultar su estructura, APIs compartidas y convenciones cuando trabajes con el backend actual",
+    },
+    "fuentes-presentacion": {
+      "path": "../../../fuentes-de-presentación",
+      "description": "Fuentes y plantillas para la presentación: incluye la PLANTILLA PI .docx de Gestion de Sistemas de Informacion, el Manual editorial TAP-PI (PDF) y un documento de ejemplo — úsalos al crear o dar formato a los entregables Word/PDF del proyecto",
+    },
+    "docs-proyecto-final": {
+      "path": "../docs",
+      "description": "Documentos del proyecto final: Capítulo I - Producto Digital (docx) y diagramas Gantt (xlsx) — úsalos al consultar o mantener la documentación entregable del proyecto",
+    },
+  },
+  "mcp": {
+    "servers": {
+      "excel": {
+        "type": "local",
+        "command": [
+          "C:\\Users\\ASUS\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\excel-mcp-server.exe",
+          "stdio",
+        ],
+      },
+      "word": {
+        "type": "local",
+        "command": [
+          "C:\\Users\\ASUS\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\word_mcp_server.exe",
+        ],
+      },
+    },
+  },
+}
