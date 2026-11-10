@@ -1,6 +1,6 @@
 # 02 — Migración inicial `init_tournament_management` (SQL con CHECKs e índices parciales)
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: 01
 

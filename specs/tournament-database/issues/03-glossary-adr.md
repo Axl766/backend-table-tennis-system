@@ -1,6 +1,6 @@
 # 03 — Glosario (4 términos nuevos) + ADR 0001
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: —
 

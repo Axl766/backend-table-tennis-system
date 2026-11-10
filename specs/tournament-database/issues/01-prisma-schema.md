@@ -1,6 +1,6 @@
 # 01 — Escribir el esquema Prisma (16 tablas)
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: —
 
