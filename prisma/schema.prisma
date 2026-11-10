@@ -1,100 +1,28 @@
-// =====================================================================
-// Tournament management database — Prisma schema (ticket 01)
-//
-// Sources of truth:
-// - specs/tournament-database/spec.md (Implementation Decisions, Índices, Claves)
-// - GLOSSARY.md (domain vocabulary; glossary↔schema mapping planned as ADR 0001)
-// - .agents/skills/db-design/SKILL.md + references/prisma-target.md (conventions)
-//
-// Conventions applied here:
-// - English identifiers: models PascalCase, fields camelCase; database names
-//   snake_case singular via @map/@@map.
-// - Named constraints: uq_*/ix_*/fk_*/ck_*. FKs get explicit onDelete
-//   (Restrict for sealed relational data: tournament/table/participants/results;
-//   Cascade for structural dependencies: roster, games, bracket) and an explicit
-//   B-Tree index. Every FK also declares onUpdate: Restrict — target PKs are
-//   immutable UUIDs, so ON UPDATE is irrelevant and fixed to Restrict.
-// - Surrogate PKs: String @db.Uuid @default(uuid(7)) (native uuid type column,
-//   app-side minting) on business tables.
-//   Escape hatch: audit_log keeps a sequential BIGINT identity (internal,
-//   high-volume, polymorphic log with no public exposure — never minted per row
-//   against the PK/UUID tax; documented trade-off).
-// - Timestamps: created_at/updated_at as explicit @db.Timestamptz instants,
-//   maintained by the application (@default(now()) / @updatedAt) — single
-//   mechanism per target, no triggers.
-// - Soft delete: only participant.deleted_at (recoverable drop before seal).
-//
-// Deliberately NOT expressible in Prisma 7 — pending custom SQL inside the
-// initial migration (ticket: init_tournament_management), named as follows:
-//   CHECKs (ck_*):
-//     ck_account_role                role ∈ {'administrator','head_judge','referee'}
-//     ck_account_referee_tournament  role <> 'referee' OR tournament_id IS NOT NULL
-//     ck_tournament_games_to_win     games_to_win ∈ {2,3,4}  // best of 3/5/7
-//     ck_modality_gender_conformation conformation ∈ {'damas','varones','mixta'}
-//     ck_player_gender               gender ∈ {'femenino','masculino'}
-//     ck_participant_conformation    conformation ∈ {'damas','varones','mixta'}
-//     ck_tournament_table_number     number >= 1
-//     ck_group_letter                group_letter SIMILAR TO '[A-Z]' OR '[A-Z][A-Z]'  // 1–2 uppercase letters
-//     ck_match_kind                  kind ∈ {'group','bracket'}
-//     ck_match_status                status ∈ {'pendiente','en_curso','finalizado'}
-//     ck_match_group_kind            kind <> 'group' OR group_id IS NOT NULL
-//     ck_match_bracket_kind          kind <> 'bracket' OR (bracket_id IS NOT NULL AND round_no IS NOT NULL)
-//     ck_match_participant_slot      slot ∈ {1,2}
-//     ck_match_game_winner_slot      winner_slot ∈ {1,2}
-//     ck_match_game_points           winner_points >= 0 AND winner_points > loser_points
-//     ck_participant_player_slot     slot BETWEEN 1 AND 5  // 2 doubles / 3–5 teams; exact count enforced in app
-//     ck_podium_place                place BETWEEN 1 AND 3
-//     ck_tournament_event_type       type ∈ {'publish_groups','close_tournament'}
-//   Partial unique indexes (engine-level concurrency, ticket says never SetNull
-//   and never app-only guards):
-//     uq_match_referee_active        UNIQUE (referee_id) WHERE referee_id IS NOT NULL AND status <> 'finalizado'
-//     uq_match_table_active          UNIQUE (table_id)   WHERE table_id IS NOT NULL AND status = 'en_curso'
-//   Partial lookup index:
-//     ix_participant_active          ON participant (tournament_id) WHERE deleted_at IS NULL  // active rosters
-//   NULL-safe uniqueness (nullable member → PostgreSQL 15+ NULLS NOT DISTINCT):
-//     uq_category_tournament_code    belongs to category; resolve in the migration
-//   Sealed-competition protocol (application, documented in trade-off defense):
-//     participants uneditable after 'publish_groups' event; the 2-point gap in a
-//     game is an application rule, not a database one (spec decision).
-// =====================================================================
+// Esquema de la base del sistema de gestión y control de torneos de tenis de mesa.
+// Fuente del dominio: specs/tournament-database/spec.md + GLOSSARY.md (glosario español ↔ esquema inglés, ADR 0001).
 
 generator client {
   provider = "prisma-client"
-  output   = "../src/generated/prisma" // imported via @prisma/adapter-pg driver adapter wiring (app scope, ticket 02)
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
-  // Prisma 7: no `url` here — DATABASE_URL is wired via prisma.config.ts (applied in ticket 02);
-  // never committed (no .env in this deliverable).
 }
 
-// ---------------------------------------------------------------------
-// Accounts and tournaments
-// ---------------------------------------------------------------------
-
-/// Platform profile: administrator or head judge (global) or referee (scoped to one tournament).
+/// Cuenta con perfil de plataforma: administrator / head_judge global, o referee ligado a un torneo.
 model Account {
   id String @id @default(uuid(7)) @db.Uuid
 
-  /// Profile of the account; allowed set in CHECK ck_account_role (migration).
-  role String @db.VarChar(20)
-
-  /// Scope of a referee (NOT NULL when role = 'referee', CHECK ck_account_referee_tournament).
+  role         String  @db.VarChar(20)
   tournamentId String? @map("tournament_id") @db.Uuid
-
-  /// Deactivation flag (HU002): accounts are kept for the audit trail, never deleted.
-  isActive Boolean @default(true) @map("is_active")
+  isActive     Boolean @default(true) @map("is_active")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  /// The tournament this referee belongs to. Review decision (grilling):
-  /// referees are sealed relational data of their tournament — Restrict, not
-  /// a structural dependency like roster/games/bracket.
   tournament Tournament? @relation("AccountTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_account_tournament")
 
-  /// Tournaments owned by this head judge.
   ownedTournaments Tournament[] @relation("TournamentHeadJudge")
   refereedMatches  Match[]      @relation("MatchReferee")
   auditEntries     AuditLog[]   @relation("AuditLogActor")
@@ -103,23 +31,17 @@ model Account {
   @@map("account")
 }
 
-/// Competition created by a head judge; format config lives here, not per match.
+/// Torneo creado por un juez general; aquí vive la configuración del formato (mejor de 3/5/7).
 model Tournament {
   id String @id @default(uuid(7)) @db.Uuid
 
   headJudgeId String @map("head_judge_id") @db.Uuid
-
-  /// Display name; unique per head judge (uq_tournament_head_judge_name).
-  name String @db.VarChar(80)
-
-  /// Games needed to win the match: 2 = best of 3, 3 = best of 5, 4 = best of 7
-  /// (CHECK ck_tournament_games_to_win in migration).
-  gamesToWin Int @map("games_to_win")
+  name        String @db.VarChar(80)
+  gamesToWin  Int    @map("games_to_win")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  /// Ownership is competition-grade data: deleting a judge that owns tournaments is restricted.
   headJudge Account @relation("TournamentHeadJudge", fields: [headJudgeId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_head_judge")
 
   refereeAccounts Account[]         @relation("AccountTournament")
@@ -139,16 +61,12 @@ model Tournament {
   @@map("tournament")
 }
 
-/// Scoring table of a tournament ("mesa" in the spec): numbered per tournament,
-/// with a match queue. (Table name prefixed to avoid the reserved word TABLE,
-/// per the mandatory db-design convention.)
+/// Mesa de juego del torneo ("mesa" en el glosario), numerada por torneo, con su cola de partidos.
 model TournamentTable {
   id String @id @default(uuid(7)) @db.Uuid
 
   tournamentId String @map("tournament_id") @db.Uuid
-
-  /// Table number within the tournament, unique (uq_tournament_table_number); >= 1 (CHECK ck_tournament_table_number).
-  number Int
+  number       Int
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -162,21 +80,12 @@ model TournamentTable {
   @@map("tournament_table")
 }
 
-// ---------------------------------------------------------------------
-// Catalogs
-// ---------------------------------------------------------------------
-
-/// Age/level division of the club catalog (IV07–IV19, adult ranges, TC) plus
-/// tournament-exclusive additions (nullable tournamentId).
+/// Categoría del catálogo del tenis de mesa: base global (IV07–IV19, rangos adultos, TC) más adicionales por torneo.
 model Category {
   id String @id @default(uuid(7)) @db.Uuid
 
-  /// Catalog code, globally unique (uq_category_code).
-  code String @unique(map: "uq_category_code") @db.VarChar(12)
-
-  name String @db.VarChar(60)
-
-  /// NULL for the global base catalog; set for tournament-exclusive categories.
+  code         String  @unique(map: "uq_category_code") @db.VarChar(12)
+  name         String  @db.VarChar(60)
   tournamentId String? @map("tournament_id") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -189,19 +98,14 @@ model Category {
   brackets     Bracket[]         @relation("BracketCategory")
   podiums      Podium[]          @relation("PodiumCategory")
 
-  /// Nullable member (tournament_id): NULL never collides with NULL, so this
-  /// unique is pending NULLS NOT DISTINCT in the migration SQL (Prisma has no
-  /// schema-language equivalent).
   @@unique([tournamentId, code], map: "uq_category_tournament_code")
   @@map("category")
 }
 
-/// Type of game disputed: individuales, dobles or teams (catalog values follow the glossary).
+/// Modalidad disputada: individuales, dobles o equipos.
 model Modality {
   id String @id @default(uuid(7)) @db.Uuid
 
-  /// Catalog value: 'individuales' | 'dobles' | 'equipos' (CHECK ck_modality_gender_conformation
-  /// per row in modality_gender). Natural unique of the catalog by name (uq_modality_name).
   name String @unique(map: "uq_modality_name") @db.VarChar(30)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -216,11 +120,9 @@ model Modality {
   @@map("modality")
 }
 
-/// Composite junction modality × gender conformation: which branches a modality admits.
+/// Conformaciones de género (Damas, Varones, Mixta) que admite cada modalidad.
 model ModalityGender {
-  modalityId String @map("modality_id") @db.Uuid
-
-  /// 'damas' | 'varones' | 'mixta'; mixta is allowed only for 'dobles' (CHECK ck_modality_gender_conformation, app validates pairing).
+  modalityId   String @map("modality_id") @db.Uuid
   conformation String @db.VarChar(10)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -232,22 +134,14 @@ model ModalityGender {
   @@map("modality_gender")
 }
 
-// ---------------------------------------------------------------------
-// Entries and rosters
-// ---------------------------------------------------------------------
-
-/// Player registered in one tournament (no natural key: duplicates are
-/// prevented during import validation in the application — user decision).
+/// Jugador inscrito en un torneo; los duplicados se previenen en la validación de la importación.
 model Player {
   id String @id @default(uuid(7)) @db.Uuid
 
-  tournamentId String @map("tournament_id") @db.Uuid
-
-  fullName String @map("full_name") @db.VarChar(100)
-
-  /// Complementary import data; nullable because the source worksheet may omit it.
-  gender String? @db.VarChar(10) // CHECK ck_player_gender: 'femenino' | 'masculino'
-  age    Int?
+  tournamentId String  @map("tournament_id") @db.Uuid
+  fullName     String  @map("full_name") @db.VarChar(100)
+  gender       String? @db.VarChar(10)
+  age          Int?
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -260,22 +154,15 @@ model Player {
   @@map("player")
 }
 
-/// An entry (loose player, pair or team) in one tournament, competing in one
-/// category × modality × conformation branch. Always enters via import.
+/// Inscripción en un torneo: jugador suelto, pareja o equipo por rama categoría × modalidad × conformación; siempre entra por importación y admite baja lógica antes del sellado.
 model Participant {
   id String @id @default(uuid(7)) @db.Uuid
 
-  tournamentId String @map("tournament_id") @db.Uuid
-  categoryId   String @map("category_id") @db.Uuid
-  modalityId   String @map("modality_id") @db.Uuid
-
-  /// Gender branch of the entry: 'damas' | 'varones' | 'mixta' (CHECK ck_participant_conformation).
-  conformation String @db.VarChar(10)
-
-  /// Logical delete only before the seal (HU012); after 'publish_groups' rows
-  /// become immutable (application protocol). Physical deletion is restricted
-  /// by every FK that references this row.
-  deletedAt DateTime? @map("deleted_at") @db.Timestamptz
+  tournamentId String    @map("tournament_id") @db.Uuid
+  categoryId   String    @map("category_id") @db.Uuid
+  modalityId   String    @map("modality_id") @db.Uuid
+  conformation String    @db.VarChar(10)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -292,20 +179,14 @@ model Participant {
   @@index([tournamentId], map: "ix_participant_tournament")
   @@index([categoryId], map: "ix_participant_category")
   @@index([modalityId], map: "ix_participant_modality")
-  // Partial index for active entries (WHERE deleted_at IS NULL) is added as
-  // ix_participant_active in the migration (Prisma 7 cannot express it here).
   @@map("participant")
 }
 
-/// Roster of an entry: player + order slot (2 for pairs, 3–5 for teams; exact
-/// count enforced in the application during import, spec decision).
+/// Roster de una inscripción: jugador con su orden (pareja de 2, equipo de 3–5).
 model ParticipantPlayer {
-  /// Entry owning this roster row.
   participantId String @map("participant_id") @db.Uuid
   playerId      String @map("player_id") @db.Uuid
-
-  /// Position of the player inside the roster, 1-based (CHECK ck_participant_player_slot, 1..5).
-  slot Int
+  slot          Int
 
   participant Participant @relation("ParticipantPlayerParticipant", fields: [participantId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_participant_player_participant")
   player      Player      @relation("ParticipantPlayerPlayer", fields: [playerId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_participant_player_player")
@@ -315,25 +196,15 @@ model ParticipantPlayer {
   @@map("participant_player")
 }
 
-// ---------------------------------------------------------------------
-// Group stage and brackets
-// ---------------------------------------------------------------------
-
-/// One group ("cruce" branch) lettered within a tournament × category ×
-/// modality × conformation branch. (Table name prefixed to avoid the reserved
-/// word GROUP, per the mandatory db-design convention.)
+/// Grupo de una rama (torneo × categoría × modalidad × conformación) identificado con letra A, B…
 model TournamentGroup {
   id String @id @default(uuid(7)) @db.Uuid
 
   tournamentId String @map("tournament_id") @db.Uuid
   categoryId   String @map("category_id") @db.Uuid
   modalityId   String @map("modality_id") @db.Uuid
-
-  /// Gender branch this group belongs to: 'damas' | 'varones' | 'mixta'.
   conformation String @db.VarChar(10)
-
-  /// Letter of the group (A, B…) within its branch.
-  groupLetter String @map("group_letter") @db.VarChar(2)
+  groupLetter  String @map("group_letter") @db.VarChar(2)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -344,89 +215,50 @@ model TournamentGroup {
 
   matches Match[] @relation("MatchGroup")
 
-  /// Natural uniqueness of a group per branch (letter included: a branch has
-  /// groups A, B… — spec shorthand "en grupo y llave" resolves to this key).
   @@unique([tournamentId, categoryId, modalityId, conformation, groupLetter], map: "uq_tournament_group_branch_letter")
   @@map("tournament_group")
 }
 
-/// Final elimination bracket of a branch, configured before the group stage closes.
+/// Llave final de una rama: clasificados por grupo y tercer puesto opcional.
 model Bracket {
   id String @id @default(uuid(7)) @db.Uuid
 
-  tournamentId String @map("tournament_id") @db.Uuid
-  categoryId   String @map("category_id") @db.Uuid
-  modalityId   String @map("modality_id") @db.Uuid
-
-  /// Gender branch this bracket belongs to: 'damas' | 'varones' | 'mixta'.
-  conformation String @db.VarChar(10)
-
-  /// Qualifiers each group sends to the bracket (draw size computed in the app).
-  classifiedPerGroup Int @map("classified_per_group")
-
-  /// Whether the closing includes a third-place match.
-  hasThirdPlace Boolean @default(false) @map("has_third_place")
+  tournamentId       String  @map("tournament_id") @db.Uuid
+  categoryId         String  @map("category_id") @db.Uuid
+  modalityId         String  @map("modality_id") @db.Uuid
+  conformation       String  @db.VarChar(10)
+  classifiedPerGroup Int     @map("classified_per_group")
+  hasThirdPlace      Boolean @default(false) @map("has_third_place")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  /// Bracket is structural data of its branch: regenerated together with its tournament.
   tournament Tournament @relation("BracketTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_bracket_tournament")
   category   Category   @relation("BracketCategory", fields: [categoryId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_bracket_category")
   modality   Modality   @relation("BracketModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_bracket_modality")
 
   matches Match[] @relation("MatchBracket")
 
-  /// Natural uniqueness of the bracket per branch (single bracket, no letter).
   @@unique([tournamentId, categoryId, modalityId, conformation], map: "uq_bracket_branch")
   @@map("bracket")
 }
 
-// ---------------------------------------------------------------------
-// Matches, table queue and games
-// ---------------------------------------------------------------------
-
-/// Unified match: group-stage crossing or bracket match (kind). Was declared
-/// "table" in the spec; table name prefixed to avoid the reserved word TABLE.
+/// Partido unificado de fase de grupos o de llave, con mesa/cola, árbitro, ganador y avance declarado.
 model Match {
   id String @id @default(uuid(7)) @db.Uuid
 
-  tournamentId String @map("tournament_id") @db.Uuid
-
-  /// 'group' | 'bracket' (CHECK ck_match_kind).
-  kind String @db.VarChar(10)
-
-  /// 'pendiente' | 'en_curso' | 'finalizado' (CHECK ck_match_status); new
-  /// matches are born pendiente (status-flag DEFAULT convention, SKILL.md).
-  status String @default("pendiente") @db.VarChar(10)
-
-  /// Group stage the match belongs to; NOT NULL when kind = 'group' (CHECK ck_match_group_kind).
-  groupId String? @map("group_id") @db.Uuid
-
-  /// Bracket the match belongs to; NOT NULL when kind = 'bracket' (CHECK ck_match_bracket_kind).
-  bracketId String? @map("bracket_id") @db.Uuid
-
-  /// Round number inside the bracket, 1-based.
-  roundNo Int? @map("round_no")
-
-  /// Table the match is queued on; NULL until scheduled.
-  tableId String? @map("table_id") @db.Uuid
-
-  /// Order inside the table queue; NULL until assigned to a table.
-  queuePosition Int? @map("queue_position")
-
-  /// Referee assigned to this match; unique among non-finalized matches (partial
-  /// UNIQUE uq_match_referee_active in migration).
-  refereeId String? @map("referee_id") @db.Uuid
-
-  /// Fixed winner once finalized (HU022); positions and advancement never recompute it.
+  tournamentId        String  @map("tournament_id") @db.Uuid
+  kind                String  @db.VarChar(10)
+  status              String  @default("pendiente") @db.VarChar(10)
+  groupId             String? @map("group_id") @db.Uuid
+  bracketId           String? @map("bracket_id") @db.Uuid
+  roundNo             Int?    @map("round_no")
+  tableId             String? @map("table_id") @db.Uuid
+  queuePosition       Int?    @map("queue_position")
+  refereeId           String? @map("referee_id") @db.Uuid
   winnerParticipantId String? @map("winner_participant_id") @db.Uuid
-
-  /// Declarative advancement (HU025): the winner feeds the next match; NULL for the finals.
-  nextMatchId String? @map("next_match_id") @db.Uuid
-
-  /// Marks the optional third-place match (HU024).
-  isThirdPlace Boolean @default(false) @map("is_third_place")
+  nextMatchId         String? @map("next_match_id") @db.Uuid
+  isThirdPlace        Boolean @default(false) @map("is_third_place")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -438,8 +270,6 @@ model Match {
   referee    Account?         @relation("MatchReferee", fields: [refereeId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_referee")
   winner     Participant?     @relation("MatchWinnerParticipant", fields: [winnerParticipantId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_winner_participant")
 
-  /// Next match in the bracket lineage. Deleting a match deletes its downstream
-  /// chain: bracket regeneration removes matches as one downward sweep.
   nextMatch       Match?  @relation("MatchNextMatch", fields: [nextMatchId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_match_next_match")
   previousMatches Match[] @relation("MatchNextMatch")
 
@@ -451,8 +281,6 @@ model Match {
   @@index([groupId], map: "ix_match_group")
   @@index([bracketId], map: "ix_match_bracket")
   @@index([tableId], map: "ix_match_table")
-  // Spec queue indexes (HU017/HU019): matches of a table by status, and the
-  // queue order of a table (queue_position ascending).
   @@index([tableId, status], map: "ix_match_table_status")
   @@index([tableId, queuePosition], map: "ix_match_table_queue")
   @@index([refereeId], map: "ix_match_referee")
@@ -461,16 +289,10 @@ model Match {
   @@map("match")
 }
 
-/// One facing side of a match, ordered by slot — explicit slots keep crossings
-/// and brackets independent of hand-built text (HU015). NULL participant marks
-/// an explicit bye (HU026).
+/// Enfrentado de un partido con su slot 1/2; participante NULL marca el bye.
 model MatchParticipant {
-  matchId String @map("match_id") @db.Uuid
-
-  /// Facing slot: 1 | 2 (CHECK ck_match_participant_slot).
-  slot Int
-
-  /// NULL for a bye facing (the match advances without an opponent).
+  matchId       String  @map("match_id") @db.Uuid
+  slot          Int
   participantId String? @map("participant_id") @db.Uuid
 
   match       Match        @relation("MatchFacing", fields: [matchId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_match_participant_match")
@@ -481,22 +303,15 @@ model MatchParticipant {
   @@map("match_participant")
 }
 
-/// Score of one game inside a match: game per game (HU020). Positions (games
-/// won, tie-break ratios) are computed in runtime from these rows.
+/// Marcador de un game del partido: puntos del ganador y del perdedor.
 model MatchGame {
   id String @id @default(uuid(7)) @db.Uuid
 
-  matchId String @map("match_id") @db.Uuid
-
-  /// Game number inside the match, 1-based; unique per match (uq_match_game_match_no).
-  gameNo Int @map("game_no")
-
-  /// Which facing won this game: 1 | 2 (CHECK ck_match_game_winner_slot).
-  winnerSlot Int @map("winner_slot")
-
-  /// Closing points: winner > loser and both declared ≥ 0 (CHECKs ck_match_game_points in migration).
-  winnerPoints Int @map("winner_points")
-  loserPoints  Int @map("loser_points")
+  matchId      String @map("match_id") @db.Uuid
+  gameNo       Int    @map("game_no")
+  winnerSlot   Int    @map("winner_slot")
+  winnerPoints Int    @map("winner_points")
+  loserPoints  Int    @map("loser_points")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -507,24 +322,15 @@ model MatchGame {
   @@map("match_game")
 }
 
-// ---------------------------------------------------------------------
-// Closing, events, attachments and audit trail
-// ---------------------------------------------------------------------
-
-/// Official podium of a branch consolidated at tournament close: places 1–3 by branch.
+/// Podio consolidado al cierre del torneo: puestos 1°–3° por rama.
 model Podium {
   id String @id @default(uuid(7)) @db.Uuid
 
-  tournamentId String @map("tournament_id") @db.Uuid
-  categoryId   String @map("category_id") @db.Uuid
-  modalityId   String @map("modality_id") @db.Uuid
-
-  /// Branch of the podium position: 'damas' | 'varones' | 'mixta'.
-  conformation String @db.VarChar(10)
-
-  /// Official position 1..2, plus 3 only when a third place was activated (CHECK ck_podium_place).
-  place Int
-
+  tournamentId  String @map("tournament_id") @db.Uuid
+  categoryId    String @map("category_id") @db.Uuid
+  modalityId    String @map("modality_id") @db.Uuid
+  conformation  String @db.VarChar(10)
+  place         Int
   participantId String @map("participant_id") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -540,20 +346,14 @@ model Podium {
   @@map("podium")
 }
 
-/// Dated, one-per-type tournament event: sealing and closure markers with a snapshot.
+/// Evento de competencia (publicar fase de grupos / cerrar torneo), único por tipo, con snapshot JSONB.
 model TournamentEvent {
   id String @id @default(uuid(7)) @db.Uuid
 
-  tournamentId String @map("tournament_id") @db.Uuid
-
-  /// 'publish_groups' | 'close_tournament' (CHECK ck_tournament_event_type); unique per tournament (uq_tournament_event_tournament_type).
-  type String @db.VarChar(20)
-
-  /// UTC instant the event took effect (HU027 evidence of the seal).
-  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz
-
-  /// Snapshot of the affected data at the time of the event (JSONB).
-  snapshot Json @db.JsonB
+  tournamentId String   @map("tournament_id") @db.Uuid
+  type         String   @db.VarChar(20)
+  occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz
+  snapshot     Json     @db.JsonB
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -564,21 +364,14 @@ model TournamentEvent {
   @@map("tournament_event")
 }
 
-/// Attached schedule as a versioned image of the tournament (HU015/HU030): each
-/// upload stacks a new version per tournament.
+/// Cronograma del torneo anexado como imagen versionada.
 model ScheduleImage {
   id String @id @default(uuid(7)) @db.Uuid
 
   tournamentId String @map("tournament_id") @db.Uuid
-
-  /// 1-based stacked version, unique per tournament (uq_schedule_image_tournament_version).
-  version Int
-
-  /// Image bytes (PNG/JPG). Stored in DB to keep the single source of truth without out-of-schema storage.
-  imageData Bytes @map("image_data")
-
-  /// Content type of the bytes (e.g. image/png).
-  mimeType String @map("mime_type") @db.VarChar(100)
+  version      Int
+  imageData    Bytes  @map("image_data")
+  mimeType     String @map("mime_type") @db.VarChar(100)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -589,27 +382,16 @@ model ScheduleImage {
   @@map("schedule_image")
 }
 
-/// Audit trail of corrections and reschedules (HU023): who, when, previous and
-/// new value. Escape hatch: sequential BIGINT PK — internal, high-volume,
-/// polymorphic table with no public exposure (justified per SKILL.md Phase 2).
+/// Auditación de correcciones y reprogramaciones: quién, cuándo, valor anterior y nuevo.
 model AuditLog {
-  /// Sequential identity; raw writers rely on the DB sequence, not on UUID minting.
   id BigInt @id @default(autoincrement())
 
-  /// Making actor (account); accounts are deactivated, never deleted, so the log keeps its subject.
-  actorAccountId String @map("actor_account_id") @db.Uuid
-
-  /// Polymorphic subject WITHOUT FK by design: 'entity' + 'entity_id' let the
-  /// trail survive subjects and avoid per-entity FK bloat on a log row.
-  entity   String @db.VarChar(50)
-  entityId String @map("entity_id") @db.Uuid
-
-  /// Previous and new value in JSONB; one of them may be NULL (pure creation or pure deletion).
-  oldValue Json? @map("old_value") @db.JsonB
-  newValue Json? @map("new_value") @db.JsonB
-
-  /// UTC instant of the audited action (the log's own clock; no updated_at — log rows are immutable).
-  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz
+  actorAccountId String   @map("actor_account_id") @db.Uuid
+  entity         String   @db.VarChar(50)
+  entityId       String   @map("entity_id") @db.Uuid
+  oldValue       Json?    @map("old_value") @db.JsonB
+  newValue       Json?    @map("new_value") @db.JsonB
+  occurredAt     DateTime @default(now()) @map("occurred_at") @db.Timestamptz
 
   actorAccount Account @relation("AuditLogActor", fields: [actorAccountId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_audit_log_actor")
 
