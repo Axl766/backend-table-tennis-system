@@ -12,7 +12,8 @@
 // - Named constraints: uq_*/ix_*/fk_*/ck_*. FKs get explicit onDelete
 //   (Restrict for sealed relational data: tournament/table/participants/results;
 //   Cascade for structural dependencies: roster, games, bracket) and an explicit
-//   B-Tree index.
+//   B-Tree index. Every FK also declares onUpdate: Restrict — target PKs are
+//   immutable UUIDs, so ON UPDATE is irrelevant and fixed to Restrict.
 // - Surrogate PKs: String @db.Uuid @default(uuid(7)) (native uuid type column,
 //   app-side minting) on business tables.
 //   Escape hatch: audit_log keeps a sequential BIGINT identity (internal,
@@ -33,14 +34,14 @@
 //     ck_player_gender               gender ∈ {'femenino','masculino'}
 //     ck_participant_conformation    conformation ∈ {'damas','varones','mixta'}
 //     ck_tournament_table_number     number >= 1
-//     ck_group_letter                group_letter NOT LIKE '%[^A-Z]%' AND length(group_letter) <= 2
+//     ck_group_letter                group_letter SIMILAR TO '[A-Z]' OR '[A-Z][A-Z]'  // 1–2 uppercase letters
 //     ck_match_kind                  kind ∈ {'group','bracket'}
 //     ck_match_status                status ∈ {'pendiente','en_curso','finalizado'}
 //     ck_match_group_kind            kind <> 'group' OR group_id IS NOT NULL
 //     ck_match_bracket_kind          kind <> 'bracket' OR (bracket_id IS NOT NULL AND round_no IS NOT NULL)
 //     ck_match_participant_slot      slot ∈ {1,2}
 //     ck_match_game_winner_slot      winner_slot ∈ {1,2}
-//     ck_match_game_points           loser_points >= 0 AND winner_points > loser_points
+//     ck_match_game_points           winner_points >= 0 AND winner_points > loser_points
 //     ck_participant_player_slot     slot BETWEEN 1 AND 5  // 2 doubles / 3–5 teams; exact count enforced in app
 //     ck_podium_place                place BETWEEN 1 AND 3
 //     ck_tournament_event_type       type ∈ {'publish_groups','close_tournament'}
@@ -88,9 +89,10 @@ model Account {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  /// The tournament this referee belongs to. Referee accounts are structural
-  /// data of their tournament, so deletion cascades.
-  tournament Tournament? @relation("AccountTournament", fields: [tournamentId], references: [id], onDelete: Cascade, map: "fk_account_tournament")
+  /// The tournament this referee belongs to. Review decision (grilling):
+  /// referees are sealed relational data of their tournament — Restrict, not
+  /// a structural dependency like roster/games/bracket.
+  tournament Tournament? @relation("AccountTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_account_tournament")
 
   /// Tournaments owned by this head judge.
   ownedTournaments Tournament[] @relation("TournamentHeadJudge")
@@ -118,7 +120,7 @@ model Tournament {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   /// Ownership is competition-grade data: deleting a judge that owns tournaments is restricted.
-  headJudge Account @relation("TournamentHeadJudge", fields: [headJudgeId], references: [id], onDelete: Restrict, map: "fk_tournament_head_judge")
+  headJudge Account @relation("TournamentHeadJudge", fields: [headJudgeId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_head_judge")
 
   refereeAccounts Account[]         @relation("AccountTournament")
   tables          TournamentTable[] @relation("TournamentTableTournament")
@@ -151,7 +153,7 @@ model TournamentTable {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  tournament Tournament @relation("TournamentTableTournament", fields: [tournamentId], references: [id], onDelete: Restrict, map: "fk_tournament_table_tournament")
+  tournament Tournament @relation("TournamentTableTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_table_tournament")
 
   matches Match[] @relation("MatchTable")
 
@@ -180,7 +182,7 @@ model Category {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  tournament Tournament? @relation("CategoryTournament", fields: [tournamentId], references: [id], onDelete: Restrict, map: "fk_category_tournament")
+  tournament Tournament? @relation("CategoryTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_category_tournament")
 
   participants Participant[]     @relation("ParticipantCategory")
   groups       TournamentGroup[] @relation("TournamentGroupCategory")
@@ -198,8 +200,9 @@ model Category {
 model Modality {
   id String @id @default(uuid(7)) @db.Uuid
 
-  /// Catalog value: 'individuales' | 'dobles' | 'equipos' (CHECK ck_modality_gender_conformation per row in modality_gender).
-  name String @db.VarChar(30)
+  /// Catalog value: 'individuales' | 'dobles' | 'equipos' (CHECK ck_modality_gender_conformation
+  /// per row in modality_gender). Natural unique of the catalog by name (uq_modality_name).
+  name String @unique(map: "uq_modality_name") @db.VarChar(30)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -220,7 +223,10 @@ model ModalityGender {
   /// 'damas' | 'varones' | 'mixta'; mixta is allowed only for 'dobles' (CHECK ck_modality_gender_conformation, app validates pairing).
   conformation String @db.VarChar(10)
 
-  modality Modality @relation("ModalityGenderModality", fields: [modalityId], references: [id], onDelete: Cascade, map: "fk_modality_gender_modality")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  modality Modality @relation("ModalityGenderModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_modality_gender_modality")
 
   @@id([modalityId, conformation])
   @@map("modality_gender")
@@ -246,7 +252,7 @@ model Player {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  tournament Tournament @relation("PlayerTournament", fields: [tournamentId], references: [id], onDelete: Restrict, map: "fk_player_tournament")
+  tournament Tournament @relation("PlayerTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_player_tournament")
 
   rosters ParticipantPlayer[] @relation("ParticipantPlayerPlayer")
 
@@ -274,9 +280,9 @@ model Participant {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  tournament Tournament @relation("ParticipantTournament", fields: [tournamentId], references: [id], onDelete: Restrict, map: "fk_participant_tournament")
-  category   Category   @relation("ParticipantCategory", fields: [categoryId], references: [id], onDelete: Restrict, map: "fk_participant_category")
-  modality   Modality   @relation("ParticipantModality", fields: [modalityId], references: [id], onDelete: Restrict, map: "fk_participant_modality")
+  tournament Tournament @relation("ParticipantTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_participant_tournament")
+  category   Category   @relation("ParticipantCategory", fields: [categoryId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_participant_category")
+  modality   Modality   @relation("ParticipantModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_participant_modality")
 
   roster  ParticipantPlayer[] @relation("ParticipantPlayerParticipant")
   facing  MatchParticipant[]  @relation("MatchParticipantParticipant")
@@ -301,8 +307,8 @@ model ParticipantPlayer {
   /// Position of the player inside the roster, 1-based (CHECK ck_participant_player_slot, 1..5).
   slot Int
 
-  participant Participant @relation("ParticipantPlayerParticipant", fields: [participantId], references: [id], onDelete: Cascade, map: "fk_participant_player_participant")
-  player      Player      @relation("ParticipantPlayerPlayer", fields: [playerId], references: [id], onDelete: Cascade, map: "fk_participant_player_player")
+  participant Participant @relation("ParticipantPlayerParticipant", fields: [participantId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_participant_player_participant")
+  player      Player      @relation("ParticipantPlayerPlayer", fields: [playerId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_participant_player_player")
 
   @@id([participantId, playerId])
   @@index([playerId], map: "ix_participant_player_player")
@@ -332,9 +338,9 @@ model TournamentGroup {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  tournament Tournament @relation("TournamentGroupTournament", fields: [tournamentId], references: [id], onDelete: Restrict, map: "fk_tournament_group_tournament")
-  category   Category   @relation("TournamentGroupCategory", fields: [categoryId], references: [id], onDelete: Restrict, map: "fk_tournament_group_category")
-  modality   Modality   @relation("TournamentGroupModality", fields: [modalityId], references: [id], onDelete: Restrict, map: "fk_tournament_group_modality")
+  tournament Tournament @relation("TournamentGroupTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_group_tournament")
+  category   Category   @relation("TournamentGroupCategory", fields: [categoryId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_group_category")
+  modality   Modality   @relation("TournamentGroupModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_group_modality")
 
   matches Match[] @relation("MatchGroup")
 
@@ -365,9 +371,9 @@ model Bracket {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   /// Bracket is structural data of its branch: regenerated together with its tournament.
-  tournament Tournament @relation("BracketTournament", fields: [tournamentId], references: [id], onDelete: Cascade, map: "fk_bracket_tournament")
-  category   Category   @relation("BracketCategory", fields: [categoryId], references: [id], onDelete: Cascade, map: "fk_bracket_category")
-  modality   Modality   @relation("BracketModality", fields: [modalityId], references: [id], onDelete: Cascade, map: "fk_bracket_modality")
+  tournament Tournament @relation("BracketTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_bracket_tournament")
+  category   Category   @relation("BracketCategory", fields: [categoryId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_bracket_category")
+  modality   Modality   @relation("BracketModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_bracket_modality")
 
   matches Match[] @relation("MatchBracket")
 
@@ -390,8 +396,9 @@ model Match {
   /// 'group' | 'bracket' (CHECK ck_match_kind).
   kind String @db.VarChar(10)
 
-  /// 'pendiente' | 'en_curso' | 'finalizado' (CHECK ck_match_status).
-  status String @db.VarChar(10)
+  /// 'pendiente' | 'en_curso' | 'finalizado' (CHECK ck_match_status); new
+  /// matches are born pendiente (status-flag DEFAULT convention, SKILL.md).
+  status String @default("pendiente") @db.VarChar(10)
 
   /// Group stage the match belongs to; NOT NULL when kind = 'group' (CHECK ck_match_group_kind).
   groupId String? @map("group_id") @db.Uuid
@@ -424,16 +431,16 @@ model Match {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  tournament Tournament       @relation("MatchTournament", fields: [tournamentId], references: [id], onDelete: Restrict, map: "fk_match_tournament")
-  group      TournamentGroup? @relation("MatchGroup", fields: [groupId], references: [id], onDelete: Restrict, map: "fk_match_group")
-  bracket    Bracket?         @relation("MatchBracket", fields: [bracketId], references: [id], onDelete: Cascade, map: "fk_match_bracket")
-  table      TournamentTable? @relation("MatchTable", fields: [tableId], references: [id], onDelete: Restrict, map: "fk_match_table")
-  referee    Account?         @relation("MatchReferee", fields: [refereeId], references: [id], onDelete: Restrict, map: "fk_match_referee")
-  winner     Participant?     @relation("MatchWinnerParticipant", fields: [winnerParticipantId], references: [id], onDelete: Restrict, map: "fk_match_winner_participant")
+  tournament Tournament       @relation("MatchTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_tournament")
+  group      TournamentGroup? @relation("MatchGroup", fields: [groupId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_group")
+  bracket    Bracket?         @relation("MatchBracket", fields: [bracketId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_match_bracket")
+  table      TournamentTable? @relation("MatchTable", fields: [tableId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_table")
+  referee    Account?         @relation("MatchReferee", fields: [refereeId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_referee")
+  winner     Participant?     @relation("MatchWinnerParticipant", fields: [winnerParticipantId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_winner_participant")
 
   /// Next match in the bracket lineage. Deleting a match deletes its downstream
   /// chain: bracket regeneration removes matches as one downward sweep.
-  nextMatch       Match?  @relation("MatchNextMatch", fields: [nextMatchId], references: [id], onDelete: Cascade, map: "fk_match_next_match")
+  nextMatch       Match?  @relation("MatchNextMatch", fields: [nextMatchId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_match_next_match")
   previousMatches Match[] @relation("MatchNextMatch")
 
   facing MatchParticipant[] @relation("MatchFacing")
@@ -444,6 +451,10 @@ model Match {
   @@index([groupId], map: "ix_match_group")
   @@index([bracketId], map: "ix_match_bracket")
   @@index([tableId], map: "ix_match_table")
+  // Spec queue indexes (HU017/HU019): matches of a table by status, and the
+  // queue order of a table (queue_position ascending).
+  @@index([tableId, status], map: "ix_match_table_status")
+  @@index([tableId, queuePosition], map: "ix_match_table_queue")
   @@index([refereeId], map: "ix_match_referee")
   @@index([winnerParticipantId], map: "ix_match_winner_participant")
   @@index([nextMatchId], map: "ix_match_next_match")
@@ -462,8 +473,8 @@ model MatchParticipant {
   /// NULL for a bye facing (the match advances without an opponent).
   participantId String? @map("participant_id") @db.Uuid
 
-  match       Match        @relation("MatchFacing", fields: [matchId], references: [id], onDelete: Cascade, map: "fk_match_participant_match")
-  participant Participant? @relation("MatchParticipantParticipant", fields: [participantId], references: [id], onDelete: Restrict, map: "fk_match_participant_participant")
+  match       Match        @relation("MatchFacing", fields: [matchId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_match_participant_match")
+  participant Participant? @relation("MatchParticipantParticipant", fields: [participantId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_match_participant_participant")
 
   @@id([matchId, slot])
   @@index([participantId], map: "ix_match_participant_participant")
@@ -490,7 +501,7 @@ model MatchGame {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  match Match @relation("MatchGameMatch", fields: [matchId], references: [id], onDelete: Cascade, map: "fk_match_game_match")
+  match Match @relation("MatchGameMatch", fields: [matchId], references: [id], onUpdate: Restrict, onDelete: Cascade, map: "fk_match_game_match")
 
   @@unique([matchId, gameNo], map: "uq_match_game_match_no")
   @@map("match_game")
@@ -519,10 +530,10 @@ model Podium {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  tournament  Tournament  @relation("PodiumTournament", fields: [tournamentId], references: [id], onDelete: Restrict, map: "fk_podium_tournament")
-  category    Category    @relation("PodiumCategory", fields: [categoryId], references: [id], onDelete: Restrict, map: "fk_podium_category")
-  modality    Modality    @relation("PodiumModality", fields: [modalityId], references: [id], onDelete: Restrict, map: "fk_podium_modality")
-  participant Participant @relation("PodiumParticipant", fields: [participantId], references: [id], onDelete: Restrict, map: "fk_podium_participant")
+  tournament  Tournament  @relation("PodiumTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_podium_tournament")
+  category    Category    @relation("PodiumCategory", fields: [categoryId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_podium_category")
+  modality    Modality    @relation("PodiumModality", fields: [modalityId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_podium_modality")
+  participant Participant @relation("PodiumParticipant", fields: [participantId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_podium_participant")
 
   @@unique([tournamentId, categoryId, modalityId, conformation, place], map: "uq_podium_branch_place")
   @@index([participantId], map: "ix_podium_participant")
@@ -547,7 +558,7 @@ model TournamentEvent {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  tournament Tournament @relation("TournamentEventTournament", fields: [tournamentId], references: [id], onDelete: Restrict, map: "fk_tournament_event_tournament")
+  tournament Tournament @relation("TournamentEventTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_tournament_event_tournament")
 
   @@unique([tournamentId, type], map: "uq_tournament_event_tournament_type")
   @@map("tournament_event")
@@ -572,7 +583,7 @@ model ScheduleImage {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  tournament Tournament @relation("ScheduleImageTournament", fields: [tournamentId], references: [id], onDelete: Restrict, map: "fk_schedule_image_tournament")
+  tournament Tournament @relation("ScheduleImageTournament", fields: [tournamentId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_schedule_image_tournament")
 
   @@unique([tournamentId, version], map: "uq_schedule_image_tournament_version")
   @@map("schedule_image")
@@ -600,7 +611,7 @@ model AuditLog {
   /// UTC instant of the audited action (the log's own clock; no updated_at — log rows are immutable).
   occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz
 
-  actorAccount Account @relation("AuditLogActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "fk_audit_log_actor")
+  actorAccount Account @relation("AuditLogActor", fields: [actorAccountId], references: [id], onUpdate: Restrict, onDelete: Restrict, map: "fk_audit_log_actor")
 
   @@index([entity, entityId], map: "ix_audit_log_entity")
   @@map("audit_log")

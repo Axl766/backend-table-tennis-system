@@ -27,3 +27,11 @@ Generar la migración inicial versionada `init_tournament_management` a partir d
 - Migración versionada en `prisma/migrations/` con el SQL final revisado de arriba a abajo, con CHECKs/parciales/NULLS NOT DISTINCT añadidos y nombrados.
 - `prisma validate` sigue pasando; sin deriva esquema↔SQL (o la deriva detectada está reportada).
 - Si `DATABASE_URL` estaba disponible: migración aplicada en el motor real en primera pasada.
+
+## Comments
+
+- 2026-11-09 — gate manual ejecutado (offline; sin `DATABASE_URL` real del usuario):
+  - `prisma validate` OK (18 modelos) y `prisma format` sin cambios de fondo.
+  - `prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script` regenerado y contrastado con el SQL de la migración: sin deriva esquema↔SQL (MISSING_BASE_LINES 0). Las únicas diferencias son las documentadas a propósito: la reescritura de `uq_category_tournament_code` como `NULLS NOT DISTINCT` y los bloques de SQL custom de cabecera (CHECKs `ck_*`, índices únicos parciales `uq_match_referee_active`/`uq_match_table_active` e índice parcial `ix_participant_active`).
+  - Requisito de motor: PostgreSQL 15+ (por `NULLS NOT DISTINCT`).
+  - La aplicación real de la migración (`prisma migrate dev` sobre la base del usuario, paso 2 del gate) queda pendiente de la `DATABASE_URL` que aporta el usuario; nunca `prisma db push`. Esto es el registro exigible por las Testing Decisions del spec.
